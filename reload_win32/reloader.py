@@ -1,6 +1,7 @@
 import threading
 import os
 import sys
+import uuid
 
 import pywintypes
 import win32con
@@ -19,8 +20,8 @@ logger.setLevel(logging.INFO)
 consoleHandler = logging.StreamHandler()
 logger.addHandler(consoleHandler)
 
-# FIXME: don't hard-code pipe name
-PIPE_NAME = r'\\.\pipe\mypipe123'
+
+pipeName = r'\\.\pipe\%s' % uuid.uuid4()
 
 callable_str = None
 wd = None
@@ -28,7 +29,7 @@ cancel_termination_watching_event = win32event.CreateEvent(None, 0, 0, None)
 
 
 hpipe = win32pipe.CreateNamedPipe(
-    PIPE_NAME,  # pipe name
+    pipeName,  # pipe name
     win32pipe.PIPE_ACCESS_DUPLEX |  # read/write access
     # win32pipe.PIPE_ACCESS_INBOUND|
     win32file.FILE_FLAG_OVERLAPPED,
@@ -156,7 +157,7 @@ class ProcessHandler(object):
         # "some_app:run"
         target_fn_str = callable_str
         app_starter = os.path.join(os.path.dirname(os.path.abspath(__file__)), "_app_starter.py")
-        cmdline = '''"%s" -u "%s" "%s"''' % (sys.executable, app_starter, target_fn_str)
+        cmdline = '''"%s" -u "%s" "%s" "%s" ''' % (sys.executable, app_starter, target_fn_str, pipeName)
 
         self.hProcess, self.hThread, self.pid, dwTid = t = win32process.CreateProcess(
             None, cmdline, None, None, 1, 0, None, wd, startup_info)
