@@ -42,8 +42,7 @@ reload my_app:main
 python -m reload_win32 my_app:main
 ```
 
-Reloader uses current working directory as root:  
-there it looks for `.reloadignore` and recursively watches all subdirectories.
+Reloader uses current working directory as root: there it looks for `.reloadignore` and recursively watches all subdirectories.
 
 ---
 
