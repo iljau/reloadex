@@ -3,6 +3,8 @@ reload_win32
 
 Restart wsgi server on Python code changes.
 
+---
+
 ### Installation and usage
 
 Installation:
@@ -43,7 +45,7 @@ python -m reload_win32 my_app:main
 Reloader uses current working directory as root:  
 there it looks for `.reloadignore` and recursively watches all subdirectories.
 
-------
+---
 
 ### Getting source for local development
 ```bash
