@@ -3,12 +3,15 @@ reload_win32
 
 Restart wsgi server on Python code changes.
 
+#### Installation and usage
+
 Installation:
 ```bash
 pip install https://github.com/iljau/reload_win32/archive/master.zip#egg=reload_win32
 ```
 
-Given example Flask application (saved as `my_app.py`), which is served by waitress.
+Given example [Flask](https://github.com/pallets/flask) application (saved as [`my_app.py`](./reload_win32/my_app.py)), which is 
+served by [Waitress](https://github.com/Pylons/waitress)
 
 ```python
 from flask import Flask
@@ -37,7 +40,12 @@ reload my_app:main
 python -m reload_win32 my_app:main
 ```
 
-Getting source for local development:
+Reloader uses current working directory as root:  
+there it looks for `.reloadignore` and recursively watches all subdirectories.
+
+------
+
+#### Getting source for local development
 ```bash
 git clone git@github.com:iljau/reload_win32.git
 cd reload_win32
