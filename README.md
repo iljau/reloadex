@@ -26,10 +26,15 @@ if __name__ == "__main__":
     main()
 ```
 
-To run this app with reloader:
+To run this app with reloader .. :
 
 ```bash
 reload my_app:main
+```
+
+.. or:
+```bash
+python -m reload_win32 my_app:main
 ```
 
 Getting source for local development:
