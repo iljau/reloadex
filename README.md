@@ -25,7 +25,9 @@ To run this app with reloader:
 reload my_app:app.wsgi_app
 ```
 
-Getting source:
+Getting source for local development:
 ```bash
 git clone git@github.com:iljau/reload_win32.git
+cd reload_win32
+pip install -e .
 ```

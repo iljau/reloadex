@@ -55,8 +55,10 @@ def get_callable(target_fn_str, folder):
     _module_str, _function_str = target_fn_str.split(":")
     _module = importlib.import_module(_module_str)
 
-    # module function
-    fn = getattr(_module, _function_str)
+    attr = _module
+    for attr_name in _function_str.split("."):
+        attr = getattr(attr, attr_name)
+    fn = attr
     return fn
 
 
