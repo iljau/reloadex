@@ -3,7 +3,7 @@ reload_win32
 
 Restart wsgi server on Python code changes.
 
-#### Installation and usage
+### Installation and usage
 
 Installation:
 ```bash
@@ -45,7 +45,7 @@ there it looks for `.reloadignore` and recursively watches all subdirectories.
 
 ------
 
-#### Getting source for local development
+### Getting source for local development
 ```bash
 git clone git@github.com:iljau/reload_win32.git
 cd reload_win32
