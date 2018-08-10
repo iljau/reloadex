@@ -19,7 +19,7 @@ logger.setLevel(logging.INFO)
 consoleHandler = logging.StreamHandler()
 logger.addHandler(consoleHandler)
 
-
+# FIXME: don't hard-code pipe name
 PIPE_NAME = r'\\.\pipe\mypipe123'
 
 callable_str = None

@@ -34,6 +34,7 @@ def terminate_app(event):
 
 
 def set_inited():
+    # FIXME: don't hard-code pipe name
     pipeName = r'\\.\pipe\mypipe123'
     fileHandle = win32file.CreateFile(pipeName,
                                       win32file.GENERIC_WRITE,
@@ -62,7 +63,7 @@ def get_callable(target_fn_str, folder):
     return fn
 
 
-if __name__ == "__main__":
+def main():
     fn = get_callable(sys.argv[1], os.getcwd())
 
     set_inited()
@@ -70,6 +71,10 @@ if __name__ == "__main__":
     win32api.SetConsoleCtrlHandler(terminate_app, True)
 
     fn()
+
+
+if __name__ == "__main__":
+    main()
 
 
 
