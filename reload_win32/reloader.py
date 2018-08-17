@@ -16,16 +16,19 @@ from pathspec import PathSpec
 
 import logging
 logger = logging.getLogger('reload_win32.reloader')
-logger.setLevel(logging.INFO)
+# logger.setLevel(logging.DEBUG)
 consoleHandler = logging.StreamHandler()
 logger.addHandler(consoleHandler)
 
+# app_starter_windows_class_name = None
 
 pipeName = r'\\.\pipe\%s' % uuid.uuid4()
 
 callable_str = None
 wd = None
 cancel_termination_watching_event = win32event.CreateEvent(None, 0, 0, None)
+
+hwndAppStarter = None
 
 
 hpipe = win32pipe.CreateNamedPipe(
@@ -43,6 +46,7 @@ hpipe = win32pipe.CreateNamedPipe(
 
 
 def wait_for_client_init(hProcess):
+    global hwndAppStarter
     logger.debug("connecting to pipe")
 
     overlapped = pywintypes.OVERLAPPED()
@@ -68,11 +72,18 @@ def wait_for_client_init(hProcess):
     elif event_i == 1:  # process terminated
         logger.debug("(PIPE CONNECTED!)")
 
+        # depends on WINDOW_CLASS_NAME
+        MESSAGE_LEN = 49
+
         logger.debug("start read")
-        result, data = win32file.ReadFile(hpipe, 2)
+        result, data = win32file.ReadFile(hpipe, MESSAGE_LEN)
         logger.debug("data: %s", data)
-        assert data == b"OK"
+        # assert data == b"OK"
         logger.debug("end read")
+
+        app_starter_windows_class_name = data.decode("utf-8")
+        # print("window class name", app_starter_windows_class_name)
+        hwndAppStarter = win32gui.FindWindow(app_starter_windows_class_name, None)
 
         win32pipe.DisconnectNamedPipe(hpipe)
         return True
@@ -167,9 +178,9 @@ class ProcessHandler(object):
 
         logger.debug("waiting for client init")
 
-        client_initited = wait_for_client_init(self.hProcess)
+        client_inited = wait_for_client_init(self.hProcess)
         self.is_starting = False
-        if client_initited:
+        if client_inited:
             logger.debug("client inited")
         else:
             logger.debug("python process DID NOT INIT!")
@@ -201,10 +212,9 @@ class ProcessHandler(object):
         from timeit import default_timer
         start = default_timer()
 
-        graceful = False
+        graceful = True
         if graceful:
-            # graceful kill
-            win32api.GenerateConsoleCtrlEvent(win32console.CTRL_BREAK_EVENT, self.pid)
+            win32api.SendMessage(hwndAppStarter, win32con.WM_DESTROY, 0, 0)
         else:
             win32api.TerminateProcess(self.hProcess, 15)
 
@@ -213,6 +223,8 @@ class ProcessHandler(object):
         # If the HandlerRoutine parameter is NULL, a TRUE value causes
         #  the calling process to ignore CTRL+C input, and a FALSE value
         #  restores normal processing of CTRL+C input. This attribute of ignoring or processing CTRL+C is inherited by child processes.
+        #
+        # TODO: ??? not sure why, but disabling this makes things work in PyCharm
         win32api.SetConsoleCtrlHandler(None, False)
 
         diff = default_timer() - start
@@ -223,7 +235,6 @@ class ProcessHandler(object):
 
 
 process_handler = None # type: ProcessHandler
-
 restart_event = win32event.CreateWaitableTimer(None, 0, None)
 RESTART_EVENT_DT = -1000 * 100 * 5 # 0.05s
 
@@ -343,17 +354,143 @@ def restarter():
 
 
 def my_exit(event):
-    #logger.debug("my_exit: %s", event)
+    logger.debug("my_exit: %s", event)
     if event == win32console.CTRL_BREAK_EVENT:
         return True
     else:
         os._exit(11)
 
 
+###
+###
+###
+
+import uuid
+import atexit
+
+import win32api
+import win32con
+import win32gui
+
+
+def reloader_atexit():
+    # invoked last (after pywin32 is over)
+    logger.debug("reloader_atexit")
+
+
+class Config:
+    WINDOW_CLASS_NAME = "reloader_%s" % uuid.uuid4()
+
+
+class ReloaderMain:
+    def __init__(self):
+        global process_handler
+
+        self.window_class_name = Config.WINDOW_CLASS_NAME
+
+        # Register the Window class.
+        window_class = win32gui.WNDCLASS()
+        hInst = window_class.hInstance = win32gui.GetModuleHandle(None)
+        window_class.lpszClassName = self.window_class_name
+        window_class.lpfnWndProc = self.pyWndProcedure  # could also specify a wndproc.
+        classAtom = win32gui.RegisterClass(window_class)
+
+        # Create the Window.
+        style = win32con.WS_OVERLAPPED | win32con.WS_SYSMENU
+        self.hWnd = win32gui.CreateWindow(classAtom,
+                                          self.window_class_name,
+                                          style,
+                                          0,
+                                          0,
+                                          win32con.CW_USEDEFAULT,
+                                          win32con.CW_USEDEFAULT,
+                                          0,
+                                          0,
+                                          hInst,
+                                          None)
+
+        # actual setup
+        process_handler = ProcessHandler()
+        process_handler.start_process()
+        # process_handler.register_ctrl_handler()
+
+        # loop
+        win32gui.UpdateWindow(self.hWnd)
+        postQuitExitCode = win32gui.PumpMessages()
+
+        # TODO: before quit need to do following
+        # and this has to done immediately after PumpMessages is over
+        # -> when we close console, then we may time-out before finishing timeout
+        # print("postQuitExitCode", postQuitExitCode)
+
+        win32gui.DestroyWindow(self.hWnd)
+        win32gui.UnregisterClass(window_class.lpszClassName, hInst)
+        # print("after after")
+
+    def pyWndProcedure(self, hWnd, uMsg, wParam, lParam):
+        def default():
+            return win32gui.DefWindowProc(hWnd, uMsg, wParam, lParam)
+
+        # FIXME: handle when console window is closed (by x)
+
+        # create stuff doesn't appear to be used
+        if False:
+            pass
+        elif uMsg == win32con.WM_NCCREATE:  # 1st according to docs, but not invoked
+            # print("WM_NCCREATE")
+            return 0
+        elif uMsg == win32con.WM_CREATE:  # 2nd according to docs, but not actually invoked
+            # print("WM_CREATE")
+            return 0
+        elif uMsg == win32con.WM_NCDESTROY:  # 130 -> last message
+            # print("WM_NCDESTROY")
+            win32api.PostQuitMessage(0)
+            return default()
+        elif uMsg == win32con.WM_DESTROY:  # 2 -> second to last
+            # print("WM_DESTROY")
+            win32api.PostQuitMessage(0)
+            return default()
+        else:
+            return default()
+
+
+mainThreadId = win32api.GetCurrentThreadId()
+
+
+# https://docs.microsoft.com/en-us/windows/console/handlerroutine
+def _console_exit_handler(dwCtrlType):
+    # print("_console_exit_handler")
+
+    # if we get threadId from here, it's different, than main
+    # print("t3", mainThreadId)
+
+    # FROM: https://docs.microsoft.com/en-gb/windows/desktop/winmsg/wm-quit
+    # "Do not post the WM_QUIT message using the PostMessage function; use PostQuitMessage."
+    # BUT: WM_QUIT did work, PostQuitMessage didn't, win32con.WM_DESTROY didn't either
+
+    wParam = 1  # postQuitExitCode gets this
+    lParam = 2  # not sure if used
+    win32api.PostThreadMessage(mainThreadId, win32con.WM_QUIT, wParam, lParam)
+    # win32gui.PostThreadMessage(mainThreadId, win32con.WM_NULL, 0, 0)
+
+    return True
+
+    # 1) this handles ctrl+c, allows atexit handler to run
+    # 2) silences: ConsoleCtrlHandler function failed -> but tray icon doesn't disappear
+    # sys.stderr = open(os.devnull, 'w')
+    # sys.exit(0)
+
+
+###
+###
+###
+
+
 def main():
     global process_handler
     global callable_str
     global wd
+    global reloader_main
 
     wd = os.getcwd()
     if len(sys.argv) < 2:
@@ -363,22 +500,26 @@ def main():
 
     reload_ignore_config()
 
-    process_handler = ProcessHandler()
+    # process_handler = ProcessHandler()
 
     win32api.SetConsoleCtrlHandler(my_exit, True)
-
-    process_handler.register_ctrl_handler()
+    # TODO: not sure why, but disabling this makes things work in PyCharm
+    # process_handler.register_ctrl_handler()
 
     t2 = threading.Thread(target=restarter)
+    t2.setDaemon(True)
     t2.start()
 
     t3 = threading.Thread(target=my_win32_watcher)
+    t3.setDaemon(True)
     t3.start()
 
-    process_handler.start_process()
+    atexit.register(reloader_atexit)
+    win32api.SetConsoleCtrlHandler(_console_exit_handler, True)
 
-    e = win32event.CreateEvent(None, 0, 0, None)
-    win32event.WaitForSingleObject(e, win32event.INFINITE)
+    # FIXME: separate init and run
+    # FIXME: list identifiers
+    ReloaderMain()
 
 
 if __name__ == "__main__":
