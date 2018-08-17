@@ -349,6 +349,7 @@ def my_exit(event):
     else:
         os._exit(11)
 
+
 def main():
     global process_handler
     global callable_str
