@@ -29,13 +29,20 @@ if __name__ == "__main__":
     main()
 ```
 
-To run this app with reloader .. :
+To run this app with reloader specify module name or filename, with main function:
 
 ```bash
 reload my_app:main
+reload my_app.py:main
 ```
 
-.. or:
+By default `main` function is invoked, so above simplifies to:
+```bash
+reload my_app
+reload my_app.py
+```
+
+Using python module invocation also works:
 ```bash
 python -m reload_win32 my_app:main
 ```
