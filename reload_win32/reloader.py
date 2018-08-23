@@ -16,7 +16,7 @@ from pathspec import PathSpec
 
 import logging
 logger = logging.getLogger('reload_win32.reloader')
-# logger.setLevel(logging.DEBUG)
+#logger.setLevel(logging.DEBUG)
 consoleHandler = logging.StreamHandler()
 logger.addHandler(consoleHandler)
 
@@ -235,7 +235,7 @@ class ProcessHandler(object):
 
 
 process_handler = None # type: ProcessHandler
-terminate_event = win32event.CreateWaitableTimer(None, 0, None)
+terminate_event = win32event.CreateEvent(None, 0, 0, None)
 restart_event = win32event.CreateWaitableTimer(None, 0, None)
 RESTART_EVENT_DT = -1000 * 100 * 5 # 0.05s
 
@@ -339,28 +339,36 @@ def my_win32_watcher():
 
         if do_reload:
             # terminate on first file change
-            win32event.SetWaitableTimer(terminate_event, 0, 0, None, None, 0)
+            win32event.SetEvent(terminate_event)
 
             # 50 ms rollup window for starting reloading
             win32event.CancelWaitableTimer(restart_event)
             win32event.SetWaitableTimer(restart_event, RESTART_EVENT_DT, 0, None, None, 0)
 
 
+def send_initial_restarter_signals():
+    win32event.SetEvent(terminate_event)
+    win32event.SetWaitableTimer(restart_event, 0, 0, None, None, 0)
+
+
 def restarter():
+    global process_handler
     while True:
         logger.debug("waiting for terminate_event")
         win32event.WaitForSingleObject(terminate_event, win32event.INFINITE)
 
-        logger.debug("waiting for restart_event")
-        win32event.WaitForSingleObject(restart_event, win32event.INFINITE)
-        win32event.CancelWaitableTimer(terminate_event)
-
         logger.debug("restarting")
         process_handler.terminate_if_needed()
+
+        logger.debug("waiting for restart_event")
+        win32event.WaitForSingleObject(restart_event, win32event.INFINITE)
 
         logger.debug("doing start_process")
         process_handler.start_process()
         logger.debug("process started")
+
+        win32event.ResetEvent(terminate_event)
+        logger.debug("restarter_loop_over")
 
 
 def my_exit(event):
@@ -419,10 +427,8 @@ class ReloaderMain:
                                           hInst,
                                           None)
 
-        # actual setup
-        process_handler = ProcessHandler()
-        process_handler.start_process()
-        # process_handler.register_ctrl_handler()
+        # init activate restarter loop
+        send_initial_restarter_signals()
 
         # loop
         win32gui.UpdateWindow(self.hWnd)
@@ -510,7 +516,7 @@ def main():
 
     reload_ignore_config()
 
-    # process_handler = ProcessHandler()
+    process_handler = ProcessHandler()
 
     win32api.SetConsoleCtrlHandler(my_exit, True)
     # TODO: not sure why, but disabling this makes things work in PyCharm
