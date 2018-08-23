@@ -235,6 +235,7 @@ class ProcessHandler(object):
 
 
 process_handler = None # type: ProcessHandler
+terminate_event = win32event.CreateWaitableTimer(None, 0, None)
 restart_event = win32event.CreateWaitableTimer(None, 0, None)
 RESTART_EVENT_DT = -1000 * 100 * 5 # 0.05s
 
@@ -337,13 +338,22 @@ def my_win32_watcher():
                 break
 
         if do_reload:
+            # terminate on first file change
+            win32event.SetWaitableTimer(terminate_event, 0, 0, None, None, 0)
+
+            # 50 ms rollup window for starting reloading
             win32event.CancelWaitableTimer(restart_event)
             win32event.SetWaitableTimer(restart_event, RESTART_EVENT_DT, 0, None, None, 0)
 
 
 def restarter():
     while True:
+        logger.debug("waiting for terminate_event")
+        win32event.WaitForSingleObject(terminate_event, win32event.INFINITE)
+
+        logger.debug("waiting for restart_event")
         win32event.WaitForSingleObject(restart_event, win32event.INFINITE)
+        win32event.CancelWaitableTimer(terminate_event)
 
         logger.debug("restarting")
         process_handler.terminate_if_needed()
