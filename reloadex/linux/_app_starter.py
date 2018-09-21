@@ -21,7 +21,7 @@ def signal_handler(signum, frame):
 
 
 def atexit_func(*args, **kwargs):
-    print("atexit_func", args, kwargs)
+    # print("atexit_func", args, kwargs)
     pass
 
 
