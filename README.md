@@ -1,4 +1,4 @@
-reload_win32
+reloadex
 -----------------------------
 
 Restart wsgi server on Python code changes.
