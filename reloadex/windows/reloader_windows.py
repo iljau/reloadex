@@ -15,6 +15,9 @@ import win32event
 from pathspec import PathSpec
 
 import logging
+
+from reloadex.common.utils_reloader import LaunchParams
+
 logger = logging.getLogger('reload_win32.reloader')
 #logger.setLevel(logging.DEBUG)
 consoleHandler = logging.StreamHandler()
@@ -502,17 +505,14 @@ def _console_exit_handler(dwCtrlType):
 ###
 
 
-def main():
+def main(launch_params: LaunchParams):
     global process_handler
     global callable_str
     global wd
     global reloader_main
 
-    wd = os.getcwd()
-    if len(sys.argv) < 2:
-        print("Usage: %s myapp:main" % os.path.basename(sys.argv[0]))
-        os._exit(-1)
-    callable_str = sys.argv[1]
+    wd = launch_params.working_directory
+    callable_str = launch_params.target_fn_str
 
     reload_ignore_config()
 

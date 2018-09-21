@@ -7,9 +7,14 @@ Restart wsgi server on Python code changes.
 
 ### Installation and usage
 
-Installation:
+Install:
 ```bash
-pip install https://github.com/iljau/reload_win32/archive/master.zip#egg=reload_win32
+pip install reloadex
+```
+
+Install from git:
+```bash
+pip install https://github.com/iljau/reloadex/archive/master.zip#egg=reloadex
 ```
 
 Given example [Flask](https://github.com/pallets/flask) application.
@@ -44,7 +49,7 @@ reload my_app.py
 
 Using python module invocation also works:
 ```bash
-python -m reload_win32 my_app:main
+python -m reloadex my_app:main
 ```
 
 Reloader uses current working directory as root: there it looks for `.reloadignore` and recursively watches all subdirectories.
@@ -53,7 +58,7 @@ Reloader uses current working directory as root: there it looks for `.reloadigno
 
 ### Getting source for local development
 ```bash
-git clone git@github.com:iljau/reload_win32.git
-cd reload_win32
+git clone git@github.com:iljau/reloadex.git
+cd reloadex
 pip install -e .
 ```
