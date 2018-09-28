@@ -7,7 +7,7 @@ packages = find_packages(".")
 
 setup(
     name='reloadex',
-    version='0.3',
+    version='0.4',
     packages=packages,
     url='https://github.com/iljau/reloadex',
     license='MIT',
@@ -19,7 +19,9 @@ setup(
     long_description_content_type='text/markdown',
 
     entry_points = {
-        'console_scripts': ['reload=reloadex.reloader:main'],
+        'console_scripts': [
+            'reloadex=reloadex.reloader:main',
+        ],
     },
     install_requires=[
         'pywin32;platform_system=="Windows"',

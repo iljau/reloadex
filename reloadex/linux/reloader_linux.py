@@ -18,7 +18,8 @@ from reloadex.linux.ctypes_wrappers._posix_spawn import (
     POSIX_SPAWN_USEVFORK,
     create_char_array,
     posix_spawn,
-    posix_spawnattr_destroy)
+    posix_spawnattr_destroy,  posix_spawnattr_setsigmask, POSIX_SPAWN_SETSIGMASK)
+from reloadex.linux.ctypes_wrappers._signalfd import sigset_t, sigemptyset, sigfillset, sigaddset, sigdelset
 from reloadex.linux.ctypes_wrappers._timerfd import CLOCK_MONOTONIC, TFD_CLOEXEC, TFD_NONBLOCK, timerfd_create, itimerspec, \
     timerfd_settime, timerfd_read
 
@@ -76,10 +77,25 @@ class _SpawnedProcess:
         psret = posix_spawnattr_init(attr)
         assert psret == 0, "psret = %s" % psret
 
-        psret = posix_spawnattr_setflags(attr, POSIX_SPAWN_USEVFORK)
+        psret = posix_spawnattr_setflags(
+            attr, POSIX_SPAWN_USEVFORK
+                  | POSIX_SPAWN_SETSIGMASK
+        )
         assert psret == 0, "psret = %s" % psret
 
         ##
+
+        # http://lists.llvm.org/pipermail/lldb-dev/2014-January/003104.html
+        # sigset_t no_signals;
+        # sigset_t all_signals;
+        # sigemptyset (&no_signals);
+        # sigfillset (&all_signals);
+        # ::posix_spawnattr_setsigmask(&attr, &no_signals);
+        # ::posix_spawnattr_setsigdefault(&attr, &all_signals);
+
+        no_signals = sigset_t()
+        sigemptyset(no_signals)
+        posix_spawnattr_setsigmask(attr, no_signals)
 
         argv = create_char_array(self.process_args)
 
@@ -122,11 +138,26 @@ class _SpawnedProcess:
 
         if self.pid is not None:
             try:
-                os.kill(self.pid, signal.SIGTERM)
+                # os.kill(self.pid, signal.SIGINT)
+                logging.debug("killing: %s" % self.pid)
+                os.kill(self.pid, signal.SIGUSR1)
+                # '''
+                try:
+                    os.waitpid(self.pid, 0)
+                except ChildProcessError as e:
+                    if e.errno == 10:
+                       #ChildProcessError: [Errno 10] No child processes
+                       pass
+                    else:
+                       raise
+                logging.debug("PROCESS killed")
+                # '''
                 self.pid = None
+
             except ProcessLookupError as e:
                 if e.errno == 3:
                     # ProcessLookupError: [Errno 3] No such process
+                    self.pid = None
                     logger.debug("terminate_process: process already terminated")
                 else:
                     raise e
@@ -145,14 +176,13 @@ class ProcessHandles:
         self.spawned_process = None
 
         # handles
-
         self.efd_process_started = eventfd(0, flags=EFD_NONBLOCK)
-        self.efd_process_terminated = eventfd(0, flags=EFD_CLOEXEC|EFD_NONBLOCK)
+        # by default terminated -> we use it do continue with loop
+        self.efd_process_terminated = eventfd(1, flags=EFD_CLOEXEC|EFD_NONBLOCK)
 
         self.efd_do_terminate_app = eventfd(0, flags=EFD_CLOEXEC | EFD_NONBLOCK)
 
         self.tfd_do_start_app = timerfd_create(CLOCK_MONOTONIC, TFD_CLOEXEC | TFD_NONBLOCK)
-
 
 
 class AppRunnerThread(threading.Thread):
@@ -174,7 +204,16 @@ class AppRunnerThread(threading.Thread):
         # http://code.activestate.com/recipes/578022-wait-for-pid-and-check-for-pid-existance-posix/
         # FIXME: process may already be killed
 
-        pid, status = os.waitpid(pid, 0)
+        status = 0
+        logging.debug("WAIT: for process to terminate")
+        try:
+            pid, status = os.waitpid(pid, 0)
+        except ChildProcessError as e:
+            if e.errno == 10:
+                logging.debug("already terminated")
+            else:
+                pass
+        logging.debug("WAIT OVER: process terminated")
 
         # FIXME: cleanup may be already be happened
         spawned_process._cleanup()
@@ -190,62 +229,47 @@ class AppRunnerThread(threading.Thread):
             exitcode = os.WEXITSTATUS(status)
             if exitcode != 0:
                 logging.debug("pid=%s: Exit code: %s" % (pid, exitcode))
+            else:
+                logging.debug("EXITED NORMALLY: _app_starter.py")
         else:
             # should never happen
             raise RuntimeError("unknown process exit status")
 
-# FIXME: not sure we need app monitoring thread -> or do we need it?
-'''
-class AppMonitoringThread(threading.Thread):
-    def set_process_handles(self, process_handles: ProcessHandles):
-        self.process_handles = process_handles
-
-    def run(self):
-        epoll_events = select.epoll()
-        epoll_events.register(self.process_handles.efd_process_started, select.EPOLLIN)  # read
-        epoll_events.register(self.process_handles.efd_process_terminated, select.EPOLLIN)  # read
-        epoll_events.register(efd_stop_reloader, select.EPOLLIN)  # read
-
-        while True:
-            print("AppMonitoringThread:waiting for events")
-            events = epoll_events.poll()
-
-            for fileno, event in events:
-                if fileno == self.process_handles.efd_process_started and event == select.EPOLLIN:
-                    logger.debug("AppMonitoringThread:process_started")
-                    eventfd_read(fileno)
-                elif fileno == self.process_handles.efd_process_terminated and event == select.EPOLLIN:
-                    logger.debug("AppMonitoringThread:process_terminated")
-                    eventfd_read(fileno)
-                elif fileno == efd_stop_reloader and event == select.EPOLLIN:
-                    logger.debug("AppMonitoringThread:stop_reloader")
-                    return
-                else:
-                    raise Exception("should not happen")
-'''
 
 class AppRelaunchingThread(threading.Thread):
     def set_process_handles(self, process_handles: ProcessHandles):
         self.process_handles = process_handles
 
     def run(self):
+        epoll_events_wait_termination = select.epoll()
+        epoll_events_wait_termination.register(self.process_handles.efd_process_terminated, select.EPOLLIN)  # read
+        epoll_events_wait_termination.register(efd_stop_reloader, select.EPOLLIN)  # read
+
         epoll_events_start = select.epoll()
         epoll_events_start.register(efd_stop_reloader, select.EPOLLIN)  # read
         epoll_events_start.register(self.process_handles.tfd_do_start_app, select.EPOLLIN)
 
-        epoll_events_stop = select.epoll()
-        epoll_events_stop.register(efd_stop_reloader, select.EPOLLIN)  # read
-        epoll_events_stop.register(self.process_handles.efd_do_terminate_app, select.EPOLLIN)
-        # process terminated unexpectedly (python exception on getting callable str)
-        epoll_events_stop.register(self.process_handles.efd_process_terminated, select.EPOLLIN)
-
         while True:
-            app_runner_thread = AppRunnerThread()
-            app_runner_thread.set_process_handles(self.process_handles)
+            logging.debug("polling for termination")
+            events = epoll_events_wait_termination.poll()
+
+            for fileno, event in events:
+                if fileno == self.process_handles.efd_process_terminated and event == select.EPOLLIN:
+                    logger.debug("AppRelaunchingThread:epoll_events_wait_termination:efd_process_terminated")
+                    eventfd_read(fileno)
+                elif fileno == efd_stop_reloader and event == select.EPOLLIN:
+                    logger.debug("AppRelaunchingThread:epoll_events_wait_termination:efd_stop_reloader")
+                    return
+                else:
+                    raise Exception("should not happen")
+
+            logging.debug("polling for startup")
 
             logging.debug("AppRelaunchingThread:waiting for epoll_events_start")
             events = epoll_events_start.poll()
             for fileno, event in events:
+                logging.debug("some start event")
+
                 if fileno == efd_stop_reloader and event == select.EPOLLIN:
                     logger.debug("AppRelaunchingThread:epoll_events_start:efd_stop_reloader")
                     return
@@ -253,6 +277,7 @@ class AppRelaunchingThread(threading.Thread):
                     logger.debug("AppRelaunchingThread:epoll_events_start:tfd_do_start_app")
 
                     # reset terminate flag, if still set (so we won't terminate immediately without reason)
+                    '''
                     try:
                         eventfd_res = eventfd_read(self.process_handles.efd_do_terminate_app)
                     except BlockingIOError as e:
@@ -261,15 +286,10 @@ class AppRelaunchingThread(threading.Thread):
                             pass
                         else:
                             raise
-
-                    # reset timer
-                    timerfd_read_res = timerfd_read(fileno)
-                    # print("timerfd_read_res", timerfd_read_res)
-
-                    # reset _app_starter flag
+                    '''
+                    # reset timer (if set)
                     try:
-                        eventfd_res2 = eventfd_read(self.process_handles.efd_process_started)
-                        print("eventfd_res2", eventfd_res2)
+                        timerfd_read_res = timerfd_read(fileno)
                     except BlockingIOError as e:
                         # BlockingIOError: [Errno 11] Resource temporarily unavailable
                         if e.errno == 11:
@@ -277,49 +297,45 @@ class AppRelaunchingThread(threading.Thread):
                         else:
                             raise
 
+                    app_runner_thread = AppRunnerThread()
+                    app_runner_thread.set_process_handles(self.process_handles)
                     app_runner_thread.start()
-                    #print("started thread")
+                    app_runner_thread.join()
                 else:
                     raise Exception("should not happen: (fileno, event) (%s,%s)" % (fileno, event) )
 
-            # FIXME: may be invoked multiple times
-            # FIXME: spawned process may be set to None
-            terminate_has_been_called = False
-            def terminate_app():
-                nonlocal terminate_has_been_called
-                # print("terminate_app")
-                if not terminate_has_been_called:
-                    terminate_has_been_called = True
-                    if app_runner_thread.is_alive():
-                        self.process_handles.spawned_process.stop()
-                        app_runner_thread.join()
+        logging.debug("AppRelaunchingThread:END")
 
+
+class AppTerminationThread(threading.Thread):
+    """Waits for events and sends kill signal to app."""
+
+    def set_process_handles(self, process_handles: ProcessHandles):
+        self.process_handles = process_handles
+
+    def run(self):
+        def terminate_app():
+            # print("TODO: should terminate app")
+            self.process_handles.spawned_process.stop()
+
+        epoll_events_stop = select.epoll()
+        epoll_events_stop.register(efd_stop_reloader, select.EPOLLIN)  # read
+        epoll_events_stop.register(self.process_handles.efd_do_terminate_app, select.EPOLLIN)
+
+        while True:
             logging.debug("AppRelaunchingThread:waiting for epoll_events_stop")
             events = epoll_events_stop.poll()
             for fileno, event in events:
-                if fileno == self.process_handles.efd_process_terminated and event == select.EPOLLIN:
-                    # Either:
-                    # 1) app terminated unexpectedly -> then other events won't be fired
-                    # 2) normal shutdown signal -> then just pass
-                    logging.debug("AppRelaunchingThread:epoll_events_stop:efd_process_terminated")
-                    eventfd_read(fileno)
-                    pass
-                elif fileno == efd_stop_reloader and event == select.EPOLLIN:
-                    logger.debug("AppRelaunchingThread:epoll_events_stop:efd_stop_reloader")
+                if fileno == efd_stop_reloader and event == select.EPOLLIN:
+                    logger.debug("AppTerminationThread:epoll_events_stop:efd_stop_reloader")
                     terminate_app()
                     return
                 elif fileno == self.process_handles.efd_do_terminate_app and event == select.EPOLLIN:
-                    logger.debug("AppRelaunchingThread:epoll_events_stop:efd_do_terminate_app")
+                    logger.debug("AppTerminationThread:epoll_events_stop:efd_do_terminate_app")
                     eventfd_read(fileno)
-
                     terminate_app()
-                    # and continue outer loop
                 else:
-                    raise Exception("should not happen: (fileno, event) (%s,%s)" % (fileno, event) )
-
-            logging.debug("AppRelaunchingThread:loop over")
-
-        logging.debug("AppRelaunchingThread:END")
+                    raise Exception("should not happen: (fileno, event) (%s,%s)" % (fileno, event))
 
 
 class FileChangesMonitoringThread(threading.Thread):
@@ -400,6 +416,11 @@ def main2_threaded(launch_params: LaunchParams):
     threads = []
 
     process_handles = ProcessHandles(launch_params)
+
+    app_termination_thread = AppTerminationThread()
+    app_termination_thread.set_process_handles(process_handles)
+    threads.append(app_termination_thread)
+    app_termination_thread.start()
 
     file_changes_monitoring_thread = FileChangesMonitoringThread()
     file_changes_monitoring_thread.set_process_handles(process_handles)

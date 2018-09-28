@@ -1,25 +1,40 @@
 from ctypes import *
 
+from reloadex.linux.ctypes_wrappers._signalfd import sigset_t
 from reloadex.linux.ctypes_wrappers.common import libc, error_text
 
 __all__ = [
+    "POSIX_SPAWN_RESETIDS",
+    "POSIX_SPAWN_SETPGROUP",
+    "POSIX_SPAWN_SETSIGDEF",
+    "POSIX_SPAWN_SETSIGMASK",
+    "POSIX_SPAWN_SETSCHEDPARAM",
+    "POSIX_SPAWN_SETSCHEDULER",
     "POSIX_SPAWN_USEVFORK",
+    "POSIX_SPAWN_SETSID",
+
     "posix_spawnattr_t",
     "posix_spawnattr_init",
     "posix_spawnattr_setflags",
     "posix_spawn",
-    "create_char_array"
+
+    "posix_spawnattr_setsigdefault",
+    "posix_spawnattr_setsigmask",
+
+    "create_char_array",
 ]
 
-POSIX_SPAWN_USEVFORK = 0x40
+POSIX_SPAWN_RESETIDS        = 0x01
+POSIX_SPAWN_SETPGROUP       = 0x02
+POSIX_SPAWN_SETSIGDEF       = 0x04
+POSIX_SPAWN_SETSIGMASK      = 0x08
+POSIX_SPAWN_SETSCHEDPARAM   = 0x10
+POSIX_SPAWN_SETSCHEDULER    = 0x20
 
-
-class sigset_t(Structure):
-    NWORDS = int(1024 / (8 * sizeof(c_ulong)))
-
-    _fields_ = (
-        ('__val', c_ulong * NWORDS),
-    )
+#ifdef __USE_GNU
+POSIX_SPAWN_USEVFORK        = 0x40
+POSIX_SPAWN_SETSID          = 0x80
+#endif
 
 
 class sched_param(Structure):
@@ -86,3 +101,19 @@ def create_char_array(_args):
         enc_arg = arg.encode('utf-8')
         argv[i] = create_string_buffer(enc_arg)
     return argv
+
+# extern int posix_spawnattr_setsigmask (posix_spawnattr_t *__restrict __attr,
+# 				       const sigset_t *__restrict __sigmask)
+
+posix_spawnattr_setsigmask = libc.posix_spawnattr_setsigmask
+posix_spawnattr_setsigmask.argtypes = [POINTER(posix_spawnattr_t), POINTER(sigset_t)]
+posix_spawnattr_setsigmask.restype = res_posix_spawn_fns
+
+# /* Set signal mask for signals with default handling in ATTR to SIGDEFAULT.  */
+# extern int posix_spawnattr_setsigdefault (posix_spawnattr_t *__restrict __attr,
+# 					  const sigset_t *__restrict
+# 					  __sigdefault)
+
+posix_spawnattr_setsigdefault = libc.posix_spawnattr_setsigdefault
+posix_spawnattr_setsigdefault.argtypes = [POINTER(posix_spawnattr_t), POINTER(sigset_t)]
+posix_spawnattr_setsigdefault.restype = res_posix_spawn_fns
