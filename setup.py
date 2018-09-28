@@ -3,12 +3,12 @@ from setuptools import setup, find_packages
 with open('README.md', 'r', encoding='utf-8') as f:
     readme = f.read()
 
-packages = find_packages(".")
+packages = find_packages("src")
+print("packages", packages)
 
 setup(
     name='reloadex',
     version='0.4',
-    packages=packages,
     url='https://github.com/iljau/reloadex',
     license='MIT',
     author='Ilja Umov',
@@ -17,6 +17,9 @@ setup(
 
     long_description=readme,
     long_description_content_type='text/markdown',
+
+    packages=packages,
+    package_dir={"": "src"},
 
     entry_points = {
         'console_scripts': [
