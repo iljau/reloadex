@@ -37,14 +37,14 @@ if __name__ == "__main__":
 To run this app with reloader specify module name or filename, with main function:
 
 ```bash
-reload my_app:main
-reload my_app.py:main
+reloadex my_app:main
+reloadex my_app.py:main
 ```
 
 By default `main` function is invoked, so above simplifies to:
 ```bash
-reload my_app
-reload my_app.py
+reloadex my_app
+reloadex my_app.py
 ```
 
 Using python module invocation also works:
