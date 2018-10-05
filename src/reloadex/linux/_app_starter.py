@@ -111,12 +111,21 @@ def main():
 
         signal.signal(signal.SIGINT, original_sigint_handler)
 
+
+        do_finally = True
+
         try:
             fn = get_callable(target_str=target_fn_str, folder=os.getcwd())
             fn()
+        except (KeyboardInterrupt, SystemExit) as e:
+            do_finally = True
+        except:
+            do_finally = False
+            raise
         finally:
-            signal.signal(signal.SIGINT, signal.SIG_IGN)
-            _thread.exit()
+            if do_finally:
+                signal.signal(signal.SIGINT, signal.SIG_IGN)
+                _thread.exit()
     else:
         # parent
 
