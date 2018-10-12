@@ -51,6 +51,7 @@ python -m reloadex my_app.py
 
 Reloader uses current working directory as root: there it looks for `.reloadignore` and recursively watches all subdirectories.
 If `.reloadignore` is not found, reloads happen on `*.py` file changes.
+
 ---
 
 ### Getting source for local development
