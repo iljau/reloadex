@@ -1,7 +1,7 @@
 reloadex
 -----------------------------
 
-Restart wsgi server on Python code changes.
+Restart wsgi server on Python code changes. Works on Windows and Linux.
 
 ---
 
@@ -34,26 +34,23 @@ if __name__ == "__main__":
     main()
 ```
 
-To run this app with reloader specify module name or filename, with main function:
+To run this app with reloader specify module name, filename or command. Following invocations are supported:
 
 ```bash
-reloadex my_app:main
-reloadex my_app.py:main
-```
-
-By default `main` function is invoked, so above simplifies to:
-```bash
-reloadex my_app
 reloadex my_app.py
+reloadex my_app.py:main
+reloadex my_app:main
+reloadex --cmd "python my_app.py"
+reloadex --cmd python my_app.py
 ```
 
 Using python module invocation also works:
 ```bash
-python -m reloadex my_app:main
+python -m reloadex my_app.py
 ```
 
 Reloader uses current working directory as root: there it looks for `.reloadignore` and recursively watches all subdirectories.
-
+If `.reloadignore` is not found, reloads happen on `*.py` file changes.
 ---
 
 ### Getting source for local development
