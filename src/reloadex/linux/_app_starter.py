@@ -100,7 +100,8 @@ def main():
     signal.signal(signal.SIGINT, signal.SIG_IGN)
 
     # FIXME: on windows arguments are in different order
-    efd_process_started_fileno_str, target_fn_str = sys.argv[1:]
+    #efd_process_started_fileno_str, target_fn_str = sys.argv[1:]
+    target_fn_str, = sys.argv[1:]
 
     pid = os.fork()
     if pid == 0:

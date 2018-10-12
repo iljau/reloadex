@@ -32,6 +32,10 @@ def get_callable_by_file(filename, function_name, folder):
     return get_main_function(_module, function_name)
 
 
+def is_target_str_file(target_str):
+    return ":" not in target_str and os.path.isfile(target_str)
+
+
 def get_callable(target_str, folder):
     if ":" not in target_str:
         _target_str = target_str

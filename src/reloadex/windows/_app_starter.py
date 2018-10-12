@@ -16,26 +16,31 @@ import win32gui
 # FIXME: logging line format
 import logging
 logger = logging.getLogger('reload_win32._app_starter')
-logger.setLevel(logging.INFO)
+#logger.setLevel(logging.INFO)
+logger.setLevel(logging.DEBUG)
 consoleHandler = logging.StreamHandler()
+formatter = logging.Formatter(logging.BASIC_FORMAT)
+consoleHandler.setFormatter(formatter)
 logger.addHandler(consoleHandler)
+
+
 
 
 mainThreadId = None
 
 
-def set_inited(pipeName, message):
-    fileHandle = win32file.CreateFile(pipeName,
-                                      win32file.GENERIC_WRITE,
-                                      0, None,
-                                      win32file.OPEN_EXISTING,
-                                      0, None)
-
-    logger.debug("starting write")
-    wres = win32file.WriteFile(fileHandle, message)
-    logger.debug(wres)
-    logger.debug("write over")
-    win32api.CloseHandle(fileHandle)
+# def set_inited(pipeName, message):
+#     fileHandle = win32file.CreateFile(pipeName,
+#                                       win32file.GENERIC_WRITE,
+#                                       0, None,
+#                                       win32file.OPEN_EXISTING,
+#                                       0, None)
+#
+#     logger.debug("starting write")
+#     wres = win32file.WriteFile(fileHandle, message)
+#     logger.debug(wres)
+#     logger.debug("write over")
+#     win32api.CloseHandle(fileHandle)
 
 
 def get_main_function(module, fn_name):
@@ -94,7 +99,7 @@ class Config:
 
 
 class AppStarterMain:
-    def __init__(self, server_fn, pipeName):
+    def __init__(self, server_fn):
         global process_handler
 
         self.window_class_name = Config.WINDOW_CLASS_NAME
@@ -129,7 +134,7 @@ class AppStarterMain:
         t.setDaemon(True)
         t.start()
 
-        set_inited(pipeName, bytes(self.window_class_name.encode('utf-8')))
+        # set_inited(pipeName, bytes(self.window_class_name.encode('utf-8')))
 
         #
         # END actual setup
@@ -142,7 +147,7 @@ class AppStarterMain:
         # TODO: before quit need to do following
         # and this has to done immediately after PumpMessages is over
         # -> when we close console, then we may time-out before finishing timeout
-        logger.debug("_app_starter: postQuitExitCode", postQuitExitCode)
+        logger.debug("_app_starter: postQuitExitCode: %s" % postQuitExitCode)
 
         win32gui.DestroyWindow(self.hWnd)
         win32gui.UnregisterClass(window_class.lpszClassName, hInst)
@@ -195,7 +200,7 @@ def main():
     global mainThreadId
 
     fn = get_callable(sys.argv[1], os.getcwd())
-    pipeName = sys.argv[2]
+    # pipeName = sys.argv[2]
 
     # FIXME: move to more obvious place
     mainThreadId = win32api.GetCurrentThreadId()
@@ -204,7 +209,7 @@ def main():
     win32api.SetConsoleCtrlHandler(_console_exit_handler, True)
 
     # FIXME: separate init and run
-    AppStarterMain(server_fn=fn, pipeName=pipeName)
+    AppStarterMain(server_fn=fn)
 
 
 if __name__ == "__main__":

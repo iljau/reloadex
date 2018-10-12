@@ -1,97 +1,56 @@
+import signal
 import threading
 import os
 import sys
 import uuid
+import atexit
+from logging import BASIC_FORMAT
+from time import sleep
+from timeit import default_timer
 
 import pywintypes
+import win32api
 import win32con
 import win32console
+import win32gui
 import win32process
-import win32api
 import win32file
 import win32pipe
 import win32event
+
 
 from pathspec import PathSpec
 
 import logging
 
+from reloadex.common.utils_app_starter import is_target_str_file
 from reloadex.common.utils_reloader import LaunchParams
 
 logger = logging.getLogger('reload_win32.reloader')
-#logger.setLevel(logging.DEBUG)
+# logger.setLevel(logging.DEBUG)
 consoleHandler = logging.StreamHandler()
+formatter = logging.Formatter(logging.BASIC_FORMAT)
+consoleHandler.setFormatter(formatter)
 logger.addHandler(consoleHandler)
 
 # app_starter_windows_class_name = None
 
 pipeName = r'\\.\pipe\%s' % uuid.uuid4()
 
-callable_str = None
-wd = None
+###
+
+# https://github.com/mozilla/build-tools/blob/c212285a4936566b6761b83bb6b6136c88b4383c/buildfarm/utils/win32_util.py
+hKernel = win32api.GetModuleHandle("Kernel32")
+exitThread = win32api.GetProcAddress(hKernel, "ExitThread")
+
+###
+
+# callable_str = None
+workingDirectory = None
 cancel_termination_watching_event = win32event.CreateEvent(None, 0, 0, None)
+createProcess_cmdline = None
 
 hwndAppStarter = None
-
-
-hpipe = win32pipe.CreateNamedPipe(
-    pipeName,  # pipe name
-    win32pipe.PIPE_ACCESS_DUPLEX |  # read/write access
-    # win32pipe.PIPE_ACCESS_INBOUND|
-    win32file.FILE_FLAG_OVERLAPPED,
-    win32pipe.PIPE_TYPE_MESSAGE,  #|  # message-type pipe
-    #win32pipe.PIPE_WAIT,  # blocking mode
-    1,  # number of instances
-    512,  # output buffer size
-    512,  # input buffer size
-    2000,  # client time-out
-    None)  # no security attributes
-
-
-def wait_for_client_init(hProcess):
-    global hwndAppStarter
-    logger.debug("connecting to pipe")
-
-    overlapped = pywintypes.OVERLAPPED()
-    pipe_connected_event = win32event.CreateEvent(None, 0, 0, None)
-    overlapped.hEvent = pipe_connected_event
-
-
-    res = win32pipe.ConnectNamedPipe(hpipe, overlapped)
-
-    ###
-    ###
-
-    logger.debug("wait #1")
-    ret = win32event.WaitForMultipleObjects(
-        [hProcess, pipe_connected_event], False, win32event.INFINITE
-    )
-    event_i = ret - win32event.WAIT_OBJECT_0
-
-    if event_i == 0:  # asked to cancel wait
-        logger.debug("WAIT OVER: process terminated (PIPE!)")
-        win32pipe.DisconnectNamedPipe(hpipe)
-        return False
-    elif event_i == 1:  # process terminated
-        logger.debug("(PIPE CONNECTED!)")
-
-        # depends on WINDOW_CLASS_NAME
-        MESSAGE_LEN = 49
-
-        logger.debug("start read")
-        result, data = win32file.ReadFile(hpipe, MESSAGE_LEN)
-        logger.debug("data: %s", data)
-        # assert data == b"OK"
-        logger.debug("end read")
-
-        app_starter_windows_class_name = data.decode("utf-8")
-        # print("window class name", app_starter_windows_class_name)
-        hwndAppStarter = win32gui.FindWindow(app_starter_windows_class_name, None)
-
-        win32pipe.DisconnectNamedPipe(hpipe)
-        return True
-    else:
-        raise Exception("unexpected ret or event_id", ret, event_i)
 
 
 class ProcessHandler(object):
@@ -99,31 +58,9 @@ class ProcessHandler(object):
         self.hProcess = None
         self.hThread = None
         self.pid = None
+        self.dwThreadId = None
 
         self.is_starting = False
-        self.accept_new = True
-        self.ctrl_c_sent = False
-
-    def register_ctrl_handler(self):
-        # register before creating subprocess
-        win32api.SetConsoleCtrlHandler(self.ctrl_handler, True)
-
-    def ctrl_handler(self, event):
-        logger.debug("main_process:ctrl_handler %s", event)
-        if event == win32console.CTRL_C_EVENT:
-            if self.pid is not None:
-                win32api.GenerateConsoleCtrlEvent(win32console.CTRL_BREAK_EVENT, self.pid)
-            return False
-        elif event == win32console.CTRL_BREAK_EVENT:
-            # assume win32console.CTRL_BREAK_EVENT
-            if self.is_process_active() and self.pid is not None:
-                # invoke subprocess handler
-                return True
-            else:
-                # allow exit
-                return False
-        else:
-            return False
 
     def is_process_active(self):
         if self.hProcess is None:
@@ -137,23 +74,10 @@ class ProcessHandler(object):
             #print repr(e)
             return False
 
-    def termination_watcher(self):
-        logger.debug("wait #1")
-        ret = win32event.WaitForMultipleObjects(
-            [cancel_termination_watching_event, self.hProcess], False, win32event.INFINITE
-        )
-        event_i = ret - win32event.WAIT_OBJECT_0
-
-        if event_i == 0: # asked to cancel wait
-            logger.debug("WAIT OVER: asked to cancel wait")
-            pass
-        elif event_i == 1:  # process terminated
-            logger.debug("WAIT OVER: process terminated")
-            pass
-        else:
-            raise Exception("unexpected ret or event_id", ret, event_i)
-
     def start_process(self):
+        global should_ignore_ctrl_c
+        global createProcess_cmdline
+
         assert self.hProcess is None
         assert self.hThread is None
         assert self.pid is None
@@ -168,26 +92,38 @@ class ProcessHandler(object):
         startup_info.hStdInput = win32file._get_osfhandle(sys.stdin.fileno())
         startup_info.dwFlags = win32process.STARTF_USESTDHANDLES
 
-        # "some_app:run"
-        target_fn_str = callable_str
-        app_starter = os.path.join(os.path.dirname(os.path.abspath(__file__)), "_app_starter.py")
-        cmdline = '''"%s" -u "%s" "%s" "%s" ''' % (sys.executable, app_starter, target_fn_str, pipeName)
+        self.hProcess, self.hThread, self.pid, self.dwThreadId = t = win32process.CreateProcess(
+            None, createProcess_cmdline, None, None, 1, 0, None, workingDirectory, startup_info)
 
-        self.hProcess, self.hThread, self.pid, dwTid = t = win32process.CreateProcess(
-            None, cmdline, None, None, 1, 0, None, wd, startup_info)
+        try:
+            hRemoteThread, remoteThreadId = win32process.CreateRemoteThread(self.hProcess, None, 0, exitThread, -1, 0)
+            logger.info("hRemote: %s %s" % (hRemoteThread, remoteThreadId))
+        except pywintypes.error as e:
+            print(e)
+            if e.winerror == 5:
+                # (5, 'CreateRemoteThread', 'Access is denied.')
+                # if process exists before we make to create remote thread
+                self.is_starting = False
+                return
+            else:
+                raise
 
-        t_termination_watcher = threading.Thread(target=self.termination_watcher)
-        t_termination_watcher.start()
-
-        logger.debug("waiting for client init")
-
-        client_inited = wait_for_client_init(self.hProcess)
-        self.is_starting = False
-        if client_inited:
-            logger.debug("client inited")
-        else:
-            logger.debug("python process DID NOT INIT!")
+        logger.debug("### wait #123")
+        ret = win32event.WaitForMultipleObjects(
+            [hRemoteThread, self.hProcess], False, win32event.INFINITE
+        )
+        event_i = ret - win32event.WAIT_OBJECT_0
+        if event_i == 0:
+            logger.debug("### hRemoteThread was executed")
+            pass
+        elif event_i == 1:
+            # process terminated (unexpectedly)
+            logger.debug("### WAIT OVER: process terminated (unexpectedly)")
             self.post_terminate()
+        else:
+            raise Exception("unexpected ret or event_id", ret, event_i)
+
+        self.is_starting = False
 
     def post_terminate(self):
         assert self.hProcess is not None
@@ -203,6 +139,7 @@ class ProcessHandler(object):
         self.hThread = None
 
         self.pid = None
+        self.dwThreadId = None
 
     def terminate_if_needed(self):
         if self.hProcess is not None or self.hThread is not None:
@@ -212,26 +149,31 @@ class ProcessHandler(object):
         assert self.hProcess is not None
         assert self.hThread is not None
 
-        from timeit import default_timer
         start = default_timer()
 
+        logging.debug("ATTEMPT at termination")
         graceful = True
         if graceful:
-            win32api.SendMessage(hwndAppStarter, win32con.WM_DESTROY, 0, 0)
+            logging.debug("### send Ctrl+C")
+            # avoid terminating our process
+            win32api.SetConsoleCtrlHandler(None, True)
+            win32api.GenerateConsoleCtrlEvent(win32console.CTRL_C_EVENT, self.pid)
         else:
             win32api.TerminateProcess(self.hProcess, 15)
-
         self.post_terminate()
+        logging.debug("POST terminate DONE")
 
-        # If the HandlerRoutine parameter is NULL, a TRUE value causes
-        #  the calling process to ignore CTRL+C input, and a FALSE value
-        #  restores normal processing of CTRL+C input. This attribute of ignoring or processing CTRL+C is inherited by child processes.
+        # If the HandlerRoutine parameter is NULL,  a
+        # TRUE value causes the calling process to ignore CTRL+C input, and a
+        # FALSE value restores normal processing of CTRL+C input. This attribute of ignoring or processing CTRL+C is inherited by child processes.
         #
-        # TODO: ??? not sure why, but disabling this makes things work in PyCharm
+        # HAS TO BE called AFTER process has been terminated
         win32api.SetConsoleCtrlHandler(None, False)
 
         diff = default_timer() - start
         logger.debug("Termination took: %.4f" % diff)
+
+        logging.debug("TERMINATE OVER")
 
 ###
 ###
@@ -240,7 +182,8 @@ class ProcessHandler(object):
 process_handler = None # type: ProcessHandler
 terminate_event = win32event.CreateEvent(None, 0, 0, None)
 restart_event = win32event.CreateWaitableTimer(None, 0, None)
-RESTART_EVENT_DT = -1000 * 100 * 5 # 0.05s
+# RESTART_EVENT_DT = -1000 * 100 * 5 # 0.05s
+RESTART_EVENT_DT = 1
 
 spec = None
 
@@ -358,6 +301,7 @@ def restarter():
     global process_handler
     while True:
         logger.debug("waiting for terminate_event")
+        # FIXME: restore waiting
         win32event.WaitForSingleObject(terminate_event, win32event.INFINITE)
 
         logger.debug("restarting")
@@ -374,8 +318,10 @@ def restarter():
         logger.debug("restarter_loop_over")
 
 
+# doesn't appear to be invoked
 def my_exit(event):
     logger.debug("my_exit: %s", event)
+    print("my_exit: %s", event)
     if event == win32console.CTRL_BREAK_EVENT:
         return True
     else:
@@ -386,12 +332,6 @@ def my_exit(event):
 ###
 ###
 
-import uuid
-import atexit
-
-import win32api
-import win32con
-import win32gui
 
 
 def reloader_atexit():
@@ -478,7 +418,7 @@ mainThreadId = win32api.GetCurrentThreadId()
 
 # https://docs.microsoft.com/en-us/windows/console/handlerroutine
 def _console_exit_handler(dwCtrlType):
-    # print("_console_exit_handler")
+    logging.debug("_console_exit_handler %s" % dwCtrlType)
 
     # if we get threadId from here, it's different, than main
     # print("t3", mainThreadId)
@@ -489,6 +429,7 @@ def _console_exit_handler(dwCtrlType):
 
     wParam = 1  # postQuitExitCode gets this
     lParam = 2  # not sure if used
+    logging.debug("posting WM_QUIT")
     win32api.PostThreadMessage(mainThreadId, win32con.WM_QUIT, wParam, lParam)
     # win32gui.PostThreadMessage(mainThreadId, win32con.WM_NULL, 0, 0)
 
@@ -508,11 +449,41 @@ def _console_exit_handler(dwCtrlType):
 def main(launch_params: LaunchParams):
     global process_handler
     global callable_str
-    global wd
+    global workingDirectory
     global reloader_main
+    global createProcess_cmdline
 
-    wd = launch_params.working_directory
-    callable_str = launch_params.target_fn_str
+    workingDirectory = launch_params.working_directory
+
+    argparse_args = launch_params.argparse_args
+
+    # FIXME: quote arguments correctly
+    #  https://blogs.msdn.microsoft.com/twistylittlepassagesallalike/2011/04/23/everyone-quotes-command-line-arguments-the-wrong-way/
+    if argparse_args.cmd == False:
+        # FIXME: "app.py" should be launched directly using python
+        target_str = argparse_args.cmd_params[0]
+        # -u: Force the stdout and stderr streams to be unbuffered. See also PYTHONUNBUFFERED.
+        # -B: don't try to write .pyc files on the import of source modules. See also PYTHONDONTWRITEBYTECODE.
+        if is_target_str_file(target_str):
+            logging.debug("RUN #1")
+            py_script_path = target_str
+            createProcess_cmdline = '''"%s" -u -B "%s" ''' % (sys.executable, py_script_path)
+        else:
+            logging.debug("RUN #2")
+            # our start
+            # "some_app:run"
+            target_fn_str = target_str
+            app_starter = os.path.join(os.path.dirname(os.path.abspath(__file__)), "_app_starter.py")
+            createProcess_cmdline = '''"%s" -u -B "%s" "%s" ''' % (sys.executable, app_starter, target_fn_str)
+    else:
+        cmd_params = argparse_args.cmd_params
+        if len(cmd_params) == 1:
+            logging.debug("RUN #3")
+            # 'gunicorn app:app' -> as single string
+            createProcess_cmdline = cmd_params[0]
+        else:
+            logging.debug("RUN #4")
+            createProcess_cmdline = " ".join(cmd_params)
 
     reload_ignore_config()
 
@@ -536,9 +507,4 @@ def main(launch_params: LaunchParams):
     # FIXME: separate init and run
     # FIXME: list identifiers
     ReloaderMain()
-
-
-if __name__ == "__main__":
-    main()
-
 

@@ -3,6 +3,7 @@ import sys
 
 from pathspec import PathSpec
 
+from reloadex.reloader_argparsing import get_parser
 from reloadex.common.utils_reloader import LaunchParams
 
 DEFAULT_RELOADIGNORE = """
@@ -16,11 +17,11 @@ DEFAULT_RELOADIGNORE = """
 
 
 class Reloader:
-    def __init__(self, platform_reloader, working_directory, target_fn_str):
+    def __init__(self, platform_reloader, working_directory, argparse_args):
         self.platform_reloader = platform_reloader
         self.launch_params = LaunchParams(
             working_directory=working_directory,
-            target_fn_str=target_fn_str,
+            argparse_args=argparse_args,
             file_triggers_reload_fn=self.file_triggers_reload
         )
 
@@ -55,12 +56,16 @@ class Reloader:
 
 
 def parse_args():
+    parser = get_parser()
+
+    if len(sys.argv) == 1:
+        parser.print_help(sys.stderr)
+        sys.exit(1)
+
+    argparse_args = parser.parse_args()
+
     working_directory = os.getcwd()
-    if len(sys.argv) < 2:
-        print("Usage: %s myapp:main" % os.path.basename(sys.argv[0]))
-        os._exit(2)
-    callable_str = sys.argv[1]
-    return working_directory, callable_str
+    return working_directory, argparse_args
 
 
 def main():
@@ -73,8 +78,8 @@ def main():
     else:
         raise NotImplementedError("unsupported platform: %s" % sys.platform)
 
-    working_directory, callable_str = parse_args()
-    reloader = Reloader(platform_reloader=platform_reloader, working_directory=working_directory, target_fn_str=callable_str)
+    working_directory, argparse_args = parse_args()
+    reloader = Reloader(platform_reloader=platform_reloader, working_directory=working_directory, argparse_args=argparse_args)
     reloader.start()
 
 

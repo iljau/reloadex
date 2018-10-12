@@ -93,6 +93,16 @@ posix_spawn.argtypes = [POINTER(c_int),
 posix_spawn.restype = res_posix_spawn_fns
 
 
+posix_spawnp = libc.posix_spawnp
+posix_spawnp.argtypes = [POINTER(c_int),
+    c_char_p,
+    c_void_p,
+    POINTER(posix_spawnattr_t),
+    LP_LP_c_char,
+    LP_LP_c_char
+]
+posix_spawnp.restype = res_posix_spawn_fns
+
 # https://mail.python.org/pipermail/python-list/2016-June/709889.html
 def create_char_array(_args):
     argc = len(_args)

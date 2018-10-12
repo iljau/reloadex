@@ -1,6 +1,7 @@
 import ctypes
 import os
 import select
+import shlex
 import signal
 import threading
 import sys
@@ -9,6 +10,7 @@ import logging
 from ctypes import c_int, byref, create_string_buffer
 from timeit import default_timer
 
+from reloadex.common.utils_app_starter import is_target_str_file
 from reloadex.common.utils_reloader import LaunchParams
 from reloadex.linux.ctypes_wrappers._eventfd import eventfd, EFD_CLOEXEC, EFD_NONBLOCK, eventfd_write, eventfd_read
 from reloadex.linux.ctypes_wrappers._inotify import inotify_init1, IN_CLOEXEC, IN_NONBLOCK, inotify_add_watch, IN_ALL_EVENTS, \
@@ -18,7 +20,7 @@ from reloadex.linux.ctypes_wrappers._posix_spawn import (
     POSIX_SPAWN_USEVFORK,
     create_char_array,
     posix_spawn,
-    posix_spawnattr_destroy,  posix_spawnattr_setsigmask, POSIX_SPAWN_SETSIGMASK)
+    posix_spawnattr_destroy, posix_spawnattr_setsigmask, POSIX_SPAWN_SETSIGMASK, posix_spawnp)
 from reloadex.linux.ctypes_wrappers._signalfd import sigset_t, sigemptyset, sigfillset, sigaddset, sigdelset
 from reloadex.linux.ctypes_wrappers._timerfd import CLOCK_MONOTONIC, TFD_CLOEXEC, TFD_NONBLOCK, timerfd_create, itimerspec, \
     timerfd_settime, timerfd_read
@@ -64,8 +66,10 @@ def disarm_do_start_timer(timerfd_fd):
     timerfd_settime(timerfd_fd, 0, ctypes.pointer(spec), None)
 
 class _SpawnedProcess:
-    def __init__(self, process_args):
+    def __init__(self, process_args, use_spawnp=False, termination_signal=signal.SIGINT):
         self.process_args = process_args
+        self.use_spawnp = use_spawnp
+        self.termination_signal = termination_signal
 
         self.pid = None
         self.attr = None
@@ -107,7 +111,13 @@ class _SpawnedProcess:
         path = create_string_buffer(self.process_args[0].encode("utf-8"))
 
         c_pid = c_int()
-        psret = posix_spawn(
+
+        if self.use_spawnp:
+            posix_spawn_fn = posix_spawnp
+        else:
+            posix_spawn_fn = posix_spawn
+
+        psret = posix_spawn_fn(
             byref(c_pid),
             path,
             None,  # __file_actions
@@ -140,7 +150,8 @@ class _SpawnedProcess:
             try:
                 # os.kill(self.pid, signal.SIGINT)
                 logging.debug("killing: %s" % self.pid)
-                os.kill(self.pid, signal.SIGUSR1)
+                # os.kill(self.pid, signal.SIGUSR1)
+                os.kill(self.pid, self.termination_signal)
                 # '''
                 try:
                     os.waitpid(self.pid, 0)
@@ -192,12 +203,31 @@ class AppRunnerThread(threading.Thread):
     def run(self):
         app_starter_path = reloadex.linux._app_starter.__file__
 
-        # -u: Force the stdout and stderr streams to be unbuffered. See also PYTHONUNBUFFERED.
-        # -B: don't try to write .pyc files on the import of source modules. See also PYTHONDONTWRITEBYTECODE.
-        _args = [sys.executable, "-u", "-B", app_starter_path,
-                 str(self.process_handles.efd_process_started), self.process_handles.launch_params.target_fn_str]
+        argparse_args = self.process_handles.launch_params.argparse_args
+        if argparse_args.cmd == False:
+            # FIXME: "app.py" should be launched directly using python
+            target_fn_str = argparse_args.cmd_params[0]
+            # -u: Force the stdout and stderr streams to be unbuffered. See also PYTHONUNBUFFERED.
+            # -B: don't try to write .pyc files on the import of source modules. See also PYTHONDONTWRITEBYTECODE.
+            if is_target_str_file(target_fn_str):
+                _args = [sys.executable, "-u", "-B", target_fn_str]
+                use_spawnp = False
+                termination_signal = signal.SIGINT
+            else:
+                _args = [sys.executable, "-u", "-B", app_starter_path, target_fn_str]
+                use_spawnp = False
+                termination_signal = signal.SIGUSR1
+        else:
+            cmd_params = argparse_args.cmd_params
+            if len(cmd_params) == 1:
+                # 'gunicorn app:app' -> as single string
+                _args = shlex.split(cmd_params[0])
+            else:
+                _args = cmd_params
+            use_spawnp = True
+            termination_signal = signal.SIGINT
 
-        spawned_process = self.process_handles.spawned_process = _SpawnedProcess(_args)
+        spawned_process = self.process_handles.spawned_process = _SpawnedProcess(_args, use_spawnp=use_spawnp, termination_signal=termination_signal)
         pid = spawned_process.start()
 
 
