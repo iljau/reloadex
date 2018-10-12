@@ -8,7 +8,7 @@ print("packages", packages)
 
 setup(
     name='reloadex',
-    version='0.5',
+    version='0.5.1',
     url='https://github.com/iljau/reloadex',
     license='MIT',
     author='Ilja Umov',
