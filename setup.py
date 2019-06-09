@@ -8,7 +8,7 @@ print("packages", packages)
 
 setup(
     name='reloadex',
-    version='0.5.1',
+    version='0.6',
     url='https://github.com/iljau/reloadex',
     license='MIT',
     author='Ilja Umov',
@@ -31,6 +31,14 @@ setup(
         'pathspec>=0.5.9'
     ],
 
+    extras_require={
+        'dev': [
+            'flask',
+            'uwsgi',
+            'waitress',
+        ]
+    },
+
     keywords='reload wsgi',
     # https://pypi.org/pypi?%3Aaction=list_classifiers
     classifiers=[
@@ -39,7 +47,7 @@ setup(
         'License :: OSI Approved :: MIT License',
         'Operating System :: POSIX :: Linux',
         'Operating System :: Microsoft :: Windows',
-        'Programming Language :: Python :: 3.5',
+        # 'Programming Language :: Python :: 3.5',
         'Programming Language :: Python :: 3.6',
         'Programming Language :: Python :: 3.7',
         'Topic :: Internet :: WWW/HTTP :: WSGI',

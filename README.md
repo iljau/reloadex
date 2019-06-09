@@ -42,6 +42,7 @@ reloadex my_app.py:main
 reloadex my_app:main
 reloadex --cmd "python my_app.py"
 reloadex --cmd python my_app.py
+reloadex --uwsgi "uwsgi --http :9090 --lazy-apps --enable-threads --master --workers 1 --wsgi-file app_flask.py"
 ```
 
 Using python module invocation also works:

@@ -9,3 +9,6 @@ def main():
             sleep(60)
     except KeyboardInterrupt as e:
         pass
+
+if __name__ == "__main__":
+    main()

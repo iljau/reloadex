@@ -1,9 +1,9 @@
+import argparse
 import os
 import sys
 
 from pathspec import PathSpec
 
-from reloadex.reloader_argparsing import get_parser
 from reloadex.common.utils_reloader import LaunchParams
 
 DEFAULT_RELOADIGNORE = """
@@ -55,21 +55,39 @@ class Reloader:
                 raise
 
 
-def parse_args():
+def parse_args(args=None):
     parser = get_parser()
 
-    if len(sys.argv) == 1:
+    if len(args) == 0:
         parser.print_help(sys.stderr)
         sys.exit(1)
 
-    argparse_args = parser.parse_args()
+    argparse_args, unknown_args = parser.parse_known_args(args)
+    argparse_args.cmd_params = unknown_args
 
     working_directory = os.getcwd()
     return working_directory, argparse_args
 
+def get_parser():
+    parser = argparse.ArgumentParser(description='Restart WSGI server on code changes')
 
-def main():
-    if sys.platform.startswith("linux"):
+    group = parser.add_mutually_exclusive_group()
+
+    group.add_argument('--cmd', dest='cmd', action='store_const',
+                        const=True, default=False,
+                        help='execute command (default is to invoke Python module)')
+
+    group.add_argument('--uwsgi', dest='uwsgi', action='store_const',
+                        const=True, default=False,
+                        help='execute uwsgi command (default is to invoke Python module)')
+
+    return parser
+
+def _main(working_directory, argparse_args):
+    if argparse_args.uwsgi:
+        from reloadex.linux import reloader_uwsgi
+        platform_reloader = reloader_uwsgi
+    elif sys.platform.startswith("linux"):
         from reloadex.linux import reloader_linux
         platform_reloader = reloader_linux
     elif sys.platform.startswith("win32"):
@@ -78,10 +96,16 @@ def main():
     else:
         raise NotImplementedError("unsupported platform: %s" % sys.platform)
 
-    working_directory, argparse_args = parse_args()
     reloader = Reloader(platform_reloader=platform_reloader, working_directory=working_directory, argparse_args=argparse_args)
     reloader.start()
 
 
+def main():
+    working_directory, argparse_args = parse_args(sys.argv[1:])
+    _main(working_directory, argparse_args)
+
+
 if __name__ == "__main__":
     main()
+
+

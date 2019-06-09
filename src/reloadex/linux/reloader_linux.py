@@ -10,6 +10,7 @@ import logging
 from ctypes import c_int, byref, create_string_buffer
 from timeit import default_timer
 
+import reloadex.linux.shared
 from reloadex.common.utils_app_starter import is_target_str_file
 from reloadex.common.utils_reloader import LaunchParams
 from reloadex.linux.ctypes_wrappers._eventfd import eventfd, EFD_CLOEXEC, EFD_NONBLOCK, eventfd_write, eventfd_read
@@ -21,21 +22,17 @@ from reloadex.linux.ctypes_wrappers._posix_spawn import (
     create_char_array,
     posix_spawn,
     posix_spawnattr_destroy, posix_spawnattr_setsigmask, POSIX_SPAWN_SETSIGMASK, posix_spawnp)
-from reloadex.linux.ctypes_wrappers._signalfd import sigset_t, sigemptyset, sigfillset, sigaddset, sigdelset
+from reloadex.linux.ctypes_wrappers._signalfd import sigset_t, sigemptyset
 from reloadex.linux.ctypes_wrappers._timerfd import CLOCK_MONOTONIC, TFD_CLOEXEC, TFD_NONBLOCK, timerfd_create, itimerspec, \
     timerfd_settime, timerfd_read
 
 import reloadex.linux._app_starter
-
+from reloadex.linux.shared import efd_stop_reloader
 
 logger = logging.getLogger(__name__)
 # logger.setLevel(logging.DEBUG)
 logger.setLevel(logging.INFO)
 logger.addHandler(logging.StreamHandler())
-
-##
-
-efd_stop_reloader = None
 
 ##
 
@@ -138,7 +135,7 @@ class _SpawnedProcess:
         with self.cleanup_lock:
             # FIXME: weakref callback to auto-invoke
             if self.attr is not None:
-                logging.debug("_SpawnedProcess:_cleanup:destroying spawnattr")
+                logger.debug("_SpawnedProcess:_cleanup:destroying spawnattr")
                 psret = posix_spawnattr_destroy(self.attr)
                 assert psret == 0, "psret = %s" % psret
                 self.attr = None
@@ -149,7 +146,7 @@ class _SpawnedProcess:
         if self.pid is not None:
             try:
                 # os.kill(self.pid, signal.SIGINT)
-                logging.debug("killing: %s" % self.pid)
+                logger.debug("killing: %s" % self.pid)
                 # os.kill(self.pid, signal.SIGUSR1)
                 os.kill(self.pid, self.termination_signal)
                 # '''
@@ -161,7 +158,7 @@ class _SpawnedProcess:
                        pass
                     else:
                        raise
-                logging.debug("PROCESS killed")
+                logger.debug("PROCESS killed")
                 # '''
                 self.pid = None
 
@@ -235,15 +232,15 @@ class AppRunnerThread(threading.Thread):
         # FIXME: process may already be killed
 
         status = 0
-        logging.debug("WAIT: for process to terminate")
+        logger.debug("WAIT: for process to terminate")
         try:
             pid, status = os.waitpid(pid, 0)
         except ChildProcessError as e:
             if e.errno == 10:
-                logging.debug("already terminated")
+                logger.debug("already terminated")
             else:
                 pass
-        logging.debug("WAIT OVER: process terminated")
+        logger.debug("WAIT OVER: process terminated")
 
         # FIXME: cleanup may be already be happened
         spawned_process._cleanup()
@@ -252,15 +249,15 @@ class AppRunnerThread(threading.Thread):
         if os.WIFSIGNALED(status):
             # process exited due to a signal; return the integer of that signal
             signalcode = os.WTERMSIG(status)
-            logging.debug("pid=%s: Terminated with signal %s:%s " % (pid, signalcode, signal.Signals(signalcode).name))
+            logger.debug("pid=%s: Terminated with signal %s:%s " % (pid, signalcode, signal.Signals(signalcode).name))
         elif os.WIFEXITED(status):
             # process exited using exit(2) system call; return the
             # integer exit(2) system call has been called with
             exitcode = os.WEXITSTATUS(status)
             if exitcode != 0:
-                logging.debug("pid=%s: Exit code: %s" % (pid, exitcode))
+                logger.debug("pid=%s: Exit code: %s" % (pid, exitcode))
             else:
-                logging.debug("EXITED NORMALLY: _app_starter.py")
+                logger.debug("EXITED NORMALLY: _app_starter.py")
         else:
             # should never happen
             raise RuntimeError("unknown process exit status")
@@ -280,7 +277,7 @@ class AppRelaunchingThread(threading.Thread):
         epoll_events_start.register(self.process_handles.tfd_do_start_app, select.EPOLLIN)
 
         while True:
-            logging.debug("polling for termination")
+            logger.debug("polling for termination")
             events = epoll_events_wait_termination.poll()
 
             for fileno, event in events:
@@ -293,12 +290,12 @@ class AppRelaunchingThread(threading.Thread):
                 else:
                     raise Exception("should not happen")
 
-            logging.debug("polling for startup")
+            logger.debug("polling for startup")
 
-            logging.debug("AppRelaunchingThread:waiting for epoll_events_start")
+            logger.debug("AppRelaunchingThread:waiting for epoll_events_start")
             events = epoll_events_start.poll()
             for fileno, event in events:
-                logging.debug("some start event")
+                logger.debug("some start event")
 
                 if fileno == efd_stop_reloader and event == select.EPOLLIN:
                     logger.debug("AppRelaunchingThread:epoll_events_start:efd_stop_reloader")
@@ -334,7 +331,7 @@ class AppRelaunchingThread(threading.Thread):
                 else:
                     raise Exception("should not happen: (fileno, event) (%s,%s)" % (fileno, event) )
 
-        logging.debug("AppRelaunchingThread:END")
+        # logging.debug("AppRelaunchingThread:END")
 
 
 class AppTerminationThread(threading.Thread):
@@ -353,7 +350,7 @@ class AppTerminationThread(threading.Thread):
         epoll_events_stop.register(self.process_handles.efd_do_terminate_app, select.EPOLLIN)
 
         while True:
-            logging.debug("AppRelaunchingThread:waiting for epoll_events_stop")
+            logger.debug("AppRelaunchingThread:waiting for epoll_events_stop")
             events = epoll_events_stop.poll()
             for fileno, event in events:
                 if fileno == efd_stop_reloader and event == select.EPOLLIN:
@@ -378,6 +375,7 @@ class FileChangesMonitoringThread(threading.Thread):
         watched_fds = {}
 
         def add_watch(full_path: bytes):
+            logger.debug(f"add_watch: {full_path}")
             c_path = create_string_buffer(full_path)
 
             watch_descriptor = inotify_add_watch(inotify_fd, c_path, IN_ALL_EVENTS & ~IN_ACCESS & ~IN_CLOSE & ~IN_OPEN)
@@ -393,14 +391,14 @@ class FileChangesMonitoringThread(threading.Thread):
             add_watch(root.encode(filesystemencoding))
 
         def event_callback(full_path, event):
-            # print("event_callback", full_path, event)
+            logger.debug(f"event_callback: {full_path} {event}")
             if self.process_handles.launch_params.file_triggers_reload_fn(full_path):
                 # start termination on first reload event
-                logging.debug("event_callback:efd_do_terminate_app")
+                logger.debug("event_callback:efd_do_terminate_app")
                 eventfd_write(self.process_handles.efd_do_terminate_app, 1)
 
                 set_do_start_timer(self.process_handles.tfd_do_start_app, after_ms=1)
-                logging.debug("event_callback:END")
+                logger.debug("event_callback:END")
             else:
                 pass
 
@@ -441,7 +439,7 @@ class FileChangesMonitoringThread(threading.Thread):
 
 # FIXME: naming
 def main2_threaded(launch_params: LaunchParams):
-    global efd_stop_reloader
+    os.chdir(launch_params.working_directory)
 
     threads = []
 
@@ -471,16 +469,14 @@ def main2_threaded(launch_params: LaunchParams):
         eventfd_write(efd_stop_reloader, 1)
 
     for thread in threads:
-        logging.debug("joining: %s" % thread)
+        logger.debug("joining: %s" % thread)
         thread.join()
-        logging.debug("joined: %s" % thread)
+        logger.debug("joined: %s" % thread)
 
-    logging.debug("OVER")
+    logger.debug("OVER")
 
 
 def main(launch_params: LaunchParams):
-    global efd_stop_reloader
-    efd_stop_reloader = eventfd(0, flags=EFD_CLOEXEC | EFD_NONBLOCK)
     try:
         main2_threaded(launch_params)
     except KeyboardInterrupt as e:
